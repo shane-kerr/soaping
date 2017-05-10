@@ -1,8 +1,14 @@
+# TODO: pick server to do NS lookups at
 # TODO: figure out how to make initial log rotate name on the correct time
 # TODO: get source IP address
+# TODO: errors
+# TODO: stats (queries sent, queries failed, etc.)
 import argparse
 import base64
+import csv
+import datetime
 import errno
+import io
 import json
 import logging
 import logging.handlers
@@ -21,9 +27,9 @@ import dns.rdtypes
 import dns.resolver
 
 
-def _auth_query_thread(target_id, target_ip, qname, qtype, resultq, stopev):
+def _auth_query_thread(name_server, target_ip, qname, qtype, resultq, stopev):
     logging.debug("_auth_query_thread(%r, %r, %r, %r, ...) startup",
-                  target_id, target_ip, qname, qtype)
+                  name_server, target_ip, qname, qtype)
     # we will use the CLOCK_MONOTONIC_RAW if available,
     # otherwise CLOCK_MONOTONIC
     clock = getattr(time, 'CLOCK_MONOTONIC_RAW',
@@ -31,21 +37,25 @@ def _auth_query_thread(target_id, target_ip, qname, qtype, resultq, stopev):
     nsid_option = dns.edns.GenericOption(dns.edns.NSID, b'')
     query = dns.message.make_query(qname, qtype, options=[nsid_option])
     while not stopev.is_set():
+        query.id = random.randint(0, 65535)
+        timestamp = time.time()
+        time_a = time.clock_gettime(clock)
         try:
-            query.id = random.randint(0, 65535)
-            timestamp = time.time()
-            time_a = time.clock_gettime(clock)
             answer = dns.query.udp(query, where=target_ip, timeout=1,
                                    ignore_unexpected=True)
             time_b = time.clock_gettime(clock)
             rt = time_b - time_a
-            resultq.put((target_id, target_ip, query, timestamp, rt, answer))
-            logging.debug("query -t %s %s @%s => %.4f seconds",
-                          dns.rdatatype.to_text(qtype), qname,
-                          target_ip, (time_b-time_a))
+            resultq.put((name_server, target_ip, query, timestamp, rt, answer))
+#            logging.debug("query -t %s %s @%s => %.4f seconds # %s",
+#                          dns.rdatatype.to_text(qtype), qname,
+#                          target_ip, (time_b-time_a), name_server)
         except dns.exception.Timeout:
-            logging.info("Timeout querying -t %s %s @%s",
-                         dns.rdatatype.to_text(qtype), qname, target_ip)
+            time_b = time.clock_gettime(clock)
+            rt = time_b - time_a
+            resultq.put((name_server, target_ip, query, timestamp, rt, None))
+            logging.debug("Timeout querying -t %s %s @%s # %s",
+                          dns.rdatatype.to_text(qtype), qname, target_ip,
+                          name_server)
         except OSError as ex:
             allowed_errors = (errno.ENETUNREACH, errno.ENETDOWN,
                               errno.EADDRNOTAVAIL)
@@ -63,7 +73,7 @@ def _auth_query_thread(target_id, target_ip, qname, qtype, resultq, stopev):
         stopev.wait(timeout=sleep_time)
 
     logging.debug("_auth_query_thread(%r, %r, %r, %r, ...) shutdown",
-                  target_id, target_ip, qname, qtype)
+                  name_server, target_ip, qname, qtype)
 
 
 def _decode_rdata(name, ttl, rd):
@@ -186,7 +196,84 @@ def _json_output_thread(resultq, interval):
         if extra_rollover and time.time() >= extra_rollover:
             rh.doRollover()
             extra_rollover = None
-        json_log.info(json.dumps(d, sys.stdout))
+        json_log.info(json.dumps(d))
+
+def get_nsid(msg):
+    for opt in msg.options:
+        if opt.otype == dns.edns.NSID:
+            return opt.data
+    return None
+
+def get_serial(msg):
+    for rrset in msg.answer:
+        if rrset.rdtype == dns.rdatatype.SOA:
+            return rrset[0].serial
+    return None
+
+def _csv_log_namer(name):
+    return re.sub(r'\.csv', '', name) + ".csv"
+
+def _csv_output_thread(resultq, interval):
+    csv_log = logging.getLogger('CSV output')
+    csv_log.propagate = False
+
+    csv_buf = io.StringIO()
+    csv_writer = csv.writer(csv_buf)
+
+    now = int(time.time())
+    extra_rollover = now - (now % interval) + interval
+    if interval % (24 * 60 * 60) == 0:
+        when = 'D'
+        interval //= 24 * 60 * 60
+    elif interval % (60 * 60) == 0:
+        when = 'H'
+        interval //= 60 * 60
+    elif interval % 60 == 0:
+        when = 'M'
+        interval //= 60
+    else:
+        when = 'S'
+    rh = logging.handlers.TimedRotatingFileHandler("soaping.csv",
+                                                   when=when,
+                                                   interval=interval,
+                                                   utc=True)
+    rh.namer = _csv_log_namer
+    csv_log.addHandler(rh)
+    csv_log.setLevel(logging.INFO)
+
+    while True:
+        result = resultq.get()
+        if result is None:
+            break
+
+        if extra_rollover and time.time() >= extra_rollover:
+            rh.doRollover()
+            extra_rollover = None
+
+        name_server, target_ip, _, timestamp, rt, answer = result
+#        name_server, target_ip, question, timestamp, rt, answer = result
+        when_dt = datetime.datetime.fromtimestamp(timestamp,
+                                                  tz=datetime.timezone.utc)
+        when = when_dt.strftime("%Y%m%dT%H%M%S.%f")
+#        qname = query.question[0].name
+        if answer is None:
+            nsid = ""
+            serial = "-"
+        else:
+            nsid = get_nsid(answer)
+            if nsid is None:
+                nsid=""
+            else:
+                nsid=nsid.decode()
+            serial = get_serial(answer)
+            if serial is None:
+                serial=""
+
+        csv_writer.writerow([serial, when, "%.6f" % rt, name_server, target_ip, nsid])
+        csv_line = csv_buf.getvalue()
+        csv_buf.seek(0)
+        csv_buf.truncate(0)
+        csv_log.info(csv_line[:-1])
 
 
 def lookup_name_server_ips(domain):
@@ -198,23 +285,36 @@ def lookup_name_server_ips(domain):
                       type(ex), domain, ex)
         return None
 
-    ips = []
-    for name_server in answer.rrset:
-        try:
-            ip_answer = resolver.query(name_server.target, dns.rdatatype.A)
-        except Exception as ex:
-            msg = "Exception %s on A lookup for %s (name server for %s): %s"
-            logging.warning(msg, type(ex), name_server.target, domain, ex)
-        for r in ip_answer.rrset:
-            ips.append(r.address)
-        try:
-            ip_answer = resolver.query(name_server.target, dns.rdatatype.AAAA)
-        except Exception as ex:
-            msg = "Exception %s on AAAA lookup for %s (name server for %s): %s"
-            logging.warning(msg, type(ex), name_server.target, domain, ex)
-        for r in ip_answer.rrset:
-            ips.append(r.address)
-    return ips
+    name_server_ips = {}
+    # XXX: could do more verification of the answer, such as class, etc.
+    if answer.rdtype == dns.rdatatype.NS:
+        for rdata in answer.rrset.items:
+            name_server = rdata.target.to_text()
+            name_server_ips[name_server] = []
+            try:
+                ip_answer = resolver.query(name_server, dns.rdatatype.A)
+                for r in ip_answer.rrset:
+                    name_server_ips[name_server].append(r.address)
+            except dns.resolver.NoAnswer:
+                # we get this if we have no A records for the name server
+                pass
+            except Exception as ex:
+                msg = "Exception %s on A lookup for %s "\
+                      "(name server for %s): %s"
+                logging.warning(msg, type(ex), name_server, domain, ex)
+            try:
+                ip_answer = resolver.query(name_server, dns.rdatatype.AAAA)
+                for r in ip_answer.rrset:
+                    name_server_ips[name_server].append(r.address)
+            except dns.resolver.NoAnswer:
+                # we get this if we have no AAAA records for the name server
+                pass
+            except Exception as ex:
+                msg = "Exception %s on AAAA lookup for %s "\
+                      "(name server for %s): %s"
+                logging.warning(msg, type(ex), name_server, domain, ex)
+
+    return name_server_ips
 
 
 def _soaping(domain, resultq, stopev):
@@ -232,23 +332,31 @@ def _soaping(domain, resultq, stopev):
             continue
 
         # create threads for these IP addresses
-        for server_ip in server_ips:
-            # stop existing thread, if present
-            if server_ip in thread_stopev:
-                thread_stopev[server_ip].set()
-            # create a new thread
-            ev = threading.Event()
-            thread_stopev[server_ip] = ev
-            t = threading.Thread(target=_auth_query_thread,
-                                 args=("foo", server_ip, domain,
-                                       dns.rdatatype.SOA, resultq, ev))
-            t.start()
+        cur_thread_id = set()
+        for name_server, server_ips in server_ips.items():
+            for server_ip in server_ips:
+                thread_id = name_server + "@" + server_ip
+                cur_thread_id.add(thread_id)
+    
+                # stop existing thread, if present
+                if thread_id in thread_stopev:
+                    thread_stopev[thread_id].set()
+                # create a new thread
+                ev = threading.Event()
+                thread_stopev[thread_id] = ev
+                t = threading.Thread(target=_auth_query_thread,
+                                     args=(name_server, server_ip, domain,
+                                           dns.rdatatype.SOA, resultq, ev))
+                t.start()
 
         # stop any other threads on IP addresses no longer in use
-        for server_ip in thread_stopev:
-            if server_ip not in server_ips:
-                thread_stopev[server_ip].set()
-                del thread_stopev[server_ip]
+        to_del = []
+        for thread_id in thread_stopev:
+            if thread_id not in cur_thread_id:
+                thread_stopev[thread_id].set()
+                to_del.append(thread_id)
+        for thread_id in to_del:
+            del thread_stopev[thread_id]
 
         # wait and check again in a while
         # TODO: base this on TTL
@@ -263,13 +371,16 @@ def _soaping(domain, resultq, stopev):
 
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+#    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     parser = argparse.ArgumentParser()
     parser.add_argument("domain", nargs=1, help="domain to check")
     args = parser.parse_args()
     try:
         q = queue.Queue()
-        t = threading.Thread(target=_json_output_thread, args=(q, 300))
+#        t = threading.Thread(target=_json_output_thread, args=(q, 300))
+#        t = threading.Thread(target=_csv_output_thread, args=(q, 300))
+        t = threading.Thread(target=_csv_output_thread, args=(q, 1800))
         t.start()
         ev = threading.Event()
         t = threading.Thread(target=_soaping, args=(args.domain[0], q, ev))
