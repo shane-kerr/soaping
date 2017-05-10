@@ -15,7 +15,6 @@ import logging.handlers
 import queue
 import random
 import re
-import sys
 import threading
 import time
 
@@ -46,9 +45,10 @@ def _auth_query_thread(name_server, target_ip, qname, qtype, resultq, stopev):
             time_b = time.clock_gettime(clock)
             rt = time_b - time_a
             resultq.put((name_server, target_ip, query, timestamp, rt, answer))
-#            logging.debug("query -t %s %s @%s => %.4f seconds # %s",
-#                          dns.rdatatype.to_text(qtype), qname,
-#                          target_ip, (time_b-time_a), name_server)
+            # log this at an even lower level than debug
+            logging.log(5, "query -t %s %s @%s => %.4f seconds # %s",
+                        dns.rdatatype.to_text(qtype), qname,
+                        target_ip, (time_b-time_a), name_server)
         except dns.exception.Timeout:
             time_b = time.clock_gettime(clock)
             rt = time_b - time_a
@@ -198,11 +198,13 @@ def _json_output_thread(resultq, interval):
             extra_rollover = None
         json_log.info(json.dumps(d))
 
+
 def get_nsid(msg):
     for opt in msg.options:
         if opt.otype == dns.edns.NSID:
             return opt.data
     return None
+
 
 def get_serial(msg):
     for rrset in msg.answer:
@@ -210,8 +212,10 @@ def get_serial(msg):
             return rrset[0].serial
     return None
 
+
 def _csv_log_namer(name):
     return re.sub(r'\.csv', '', name) + ".csv"
+
 
 def _csv_output_thread(resultq, interval):
     csv_log = logging.getLogger('CSV output')
@@ -250,26 +254,27 @@ def _csv_output_thread(resultq, interval):
             rh.doRollover()
             extra_rollover = None
 
+        # 3rd part of tuple is the question message
+        # you can get the qname in query.question[0].name
         name_server, target_ip, _, timestamp, rt, answer = result
-#        name_server, target_ip, question, timestamp, rt, answer = result
         when_dt = datetime.datetime.fromtimestamp(timestamp,
                                                   tz=datetime.timezone.utc)
         when = when_dt.strftime("%Y%m%dT%H%M%S.%f")
-#        qname = query.question[0].name
         if answer is None:
             nsid = ""
             serial = "-"
         else:
             nsid = get_nsid(answer)
             if nsid is None:
-                nsid=""
+                nsid = ""
             else:
-                nsid=nsid.decode()
+                nsid = nsid.decode()
             serial = get_serial(answer)
             if serial is None:
-                serial=""
+                serial = ""
 
-        csv_writer.writerow([serial, when, "%.6f" % rt, name_server, target_ip, nsid])
+        csv_writer.writerow([serial, when, "%.6f" % rt,
+                             name_server, target_ip, nsid])
         csv_line = csv_buf.getvalue()
         csv_buf.seek(0)
         csv_buf.truncate(0)
@@ -337,7 +342,7 @@ def _soaping(domain, resultq, stopev):
             for server_ip in server_ips:
                 thread_id = name_server + "@" + server_ip
                 cur_thread_id.add(thread_id)
-    
+
                 # stop existing thread, if present
                 if thread_id in thread_stopev:
                     thread_stopev[thread_id].set()
@@ -371,15 +376,12 @@ def _soaping(domain, resultq, stopev):
 
 
 def main():
-#    logging.basicConfig(level=logging.INFO)
     logging.basicConfig(level=logging.DEBUG)
     parser = argparse.ArgumentParser()
     parser.add_argument("domain", nargs=1, help="domain to check")
     args = parser.parse_args()
     try:
         q = queue.Queue()
-#        t = threading.Thread(target=_json_output_thread, args=(q, 300))
-#        t = threading.Thread(target=_csv_output_thread, args=(q, 300))
         t = threading.Thread(target=_csv_output_thread, args=(q, 1800))
         t.start()
         ev = threading.Event()
