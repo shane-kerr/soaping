@@ -14,7 +14,10 @@ import logging.handlers
 import queue
 import random
 import re
-import selectors
+try:
+    import selectors
+except ImportError:
+    import selectors34 as selectors
 import socket
 import ssl
 import sys

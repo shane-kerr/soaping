@@ -30,6 +30,7 @@ For PyPy3 this is slightly different:
     $ . venv/bin/activate
     $ python3 -m ensurepip
     $ python3 -m pip install dnspython
+    $ python3 -m pip install selectors34
 
 ## Running
 
