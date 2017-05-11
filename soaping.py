@@ -1,4 +1,3 @@
-# TODO: pick server to do NS lookups at
 # TODO: figure out how to make initial log rotate name on the correct time
 # TODO: get source IP address
 # TODO: errors
@@ -15,6 +14,10 @@ import logging.handlers
 import queue
 import random
 import re
+import selectors
+import socket
+import ssl
+import sys
 import threading
 import time
 
@@ -281,10 +284,77 @@ def _csv_output_thread(resultq, interval):
         csv_log.info(csv_line[:-1])
 
 
-def lookup_name_server_ips(domain):
+def _tls_tunnel_listener(socket_in, target_addr):
+    """Only handle a single connection at a time."""
+    logging.debug("_tls_tunnel_listener(%r, %r) startup",
+                  socket_in, target_addr)
+    while True:
+        sel = None
+        client_socket = None
+        socket_out = None
+        ssl_socket_out = None
+
+        try:
+            client_socket, client_addr = socket_in.accept()
+            logging.debug("tunnel client connected from %r", client_addr)
+            socket_out = socket.create_connection(target_addr)
+            logging.debug("tunnel connected to %r", target_addr)
+            ssl_socket_out = ssl.wrap_socket(socket_out)
+            sel = selectors.DefaultSelector()
+            sel.register(client_socket, selectors.EVENT_READ, ssl_socket_out)
+            sel.register(ssl_socket_out, selectors.EVENT_READ, client_socket)
+            connected = True
+            while connected:
+                for key, mask in sel.select():
+                    data = key.fileobj.recv(18000)
+                    if len(data) == 0:
+                        connected = False
+                    else:
+                        key.data.sendall(data)
+            logging.debug("tunnel closed")
+        except Exception as ex:
+            logging.warning("TLS tunnel error: %s", ex)
+
+        del sel
+        if ssl_socket_out:
+            ssl_socket_out.close()
+        if socket_out:
+            socket_out.close()
+        if client_socket:
+            client_socket.close()
+
+
+def _start_tunnel(target_addr, ready_ev):
+    """Set up an internal tunnel to the given address,
+    return the address we are listening on."""
+    socket_in = socket.socket()
+    socket_in.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    socket_in.bind(('127.0.0.1', 0))
+    socket_in.listen(1)
+    t = threading.Thread(target=_tls_tunnel_listener,
+                         args=(socket_in, target_addr),
+                         daemon=True)
+    t.start()
+    ready_ev.set()
+    return socket_in.getsockname()
+
+
+def lookup_name_server_ips(domain, resolver_ip, use_tls):
+    use_tcp = False
     resolver = dns.resolver.Resolver()
+    if resolver_ip:
+        if use_tls:
+            logging.debug("tunnel closed")
+            tunnel_ready_ev = threading.Event()
+            tunnel = _start_tunnel((resolver_ip, 853), tunnel_ready_ev)
+            resolver.nameservers = [tunnel[0]]
+            resolver.port = tunnel[1]
+            use_tcp = True
+            tunnel_ready_ev.wait()
+        else:
+            resolver.nameservers = [resolver_ip]
     try:
-        answer = resolver.query(domain, dns.rdatatype.NS)
+        answer = resolver.query(domain, dns.rdatatype.NS, tcp=use_tcp)
     except Exception as ex:
         logging.error("Unexpected %s exception for NS lookup of %s: %s",
                       type(ex), domain, ex)
@@ -297,7 +367,8 @@ def lookup_name_server_ips(domain):
             name_server = rdata.target.to_text()
             name_server_ips[name_server] = []
             try:
-                ip_answer = resolver.query(name_server, dns.rdatatype.A)
+                ip_answer = resolver.query(name_server, dns.rdatatype.A,
+                                           tcp=use_tcp)
                 for r in ip_answer.rrset:
                     name_server_ips[name_server].append(r.address)
             except dns.resolver.NoAnswer:
@@ -308,7 +379,8 @@ def lookup_name_server_ips(domain):
                       "(name server for %s): %s"
                 logging.warning(msg, type(ex), name_server, domain, ex)
             try:
-                ip_answer = resolver.query(name_server, dns.rdatatype.AAAA)
+                ip_answer = resolver.query(name_server, dns.rdatatype.AAAA,
+                                           tcp=use_tcp)
                 for r in ip_answer.rrset:
                     name_server_ips[name_server].append(r.address)
             except dns.resolver.NoAnswer:
@@ -322,13 +394,13 @@ def lookup_name_server_ips(domain):
     return name_server_ips
 
 
-def _soaping(domain, resultq, stopev):
+def _soaping(domain, resolver_ip, use_tls, resultq, stopev):
     logging.debug("_soaping(%r, resultq, stopev) startup", domain)
 
     thread_stopev = {}
     while not stopev.is_set():
         # find the IP addresses to use
-        server_ips = lookup_name_server_ips(domain)
+        server_ips = lookup_name_server_ips(domain, resolver_ip, use_tls)
         logging.debug("server_ips: %s", server_ips)
         if not server_ips:
             logging.warning("no name servers found for %r, retrying", domain)
@@ -379,13 +451,27 @@ def main():
     logging.basicConfig(level=logging.DEBUG)
     parser = argparse.ArgumentParser()
     parser.add_argument("domain", nargs=1, help="domain to check")
+    parser.add_argument("-r", "--resolver", help="IP address of resolver")
+    parser.add_argument("-t", "--tls", action='store_true',
+                        help="Use TLS to resolver")
     args = parser.parse_args()
+    if args.resolver is not None:
+        try:
+            socket.inet_pton(socket.AF_INET6, args.resolver)
+        except OSError:
+            try:
+                socket.inet_pton(socket.AF_INET, args.resolver)
+            except OSError:
+                print("Bad IP address '%s'" % args.resolver, file=sys.stderr)
+                sys.exit(1)
     try:
         q = queue.Queue()
         t = threading.Thread(target=_csv_output_thread, args=(q, 1800))
         t.start()
         ev = threading.Event()
-        t = threading.Thread(target=_soaping, args=(args.domain[0], q, ev))
+        t = threading.Thread(target=_soaping,
+                             args=(args.domain[0], args.resolver, args.tls,
+                                   q, ev))
         t.start()
         t.join()
     except KeyboardInterrupt:
