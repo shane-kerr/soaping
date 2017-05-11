@@ -40,3 +40,15 @@ To run the program, specify the domain to watch:
 
 Any problems in execution will be printed to the console. Output is in
 the `soaping.csv` file, which is rotated every 30 minutes.
+
+Normally the system DNS resolver is used to find the name servers for
+the domain, along with the IPv4 and IPv6 addresses of those name
+servers. If you want to use an alternate DNS resolver, you can specify
+this:
+
+    $ python3 soaping.py -r 8.8.8.8 example.org
+
+It also supports DNS over TLS, so you could monitor the Yeti root
+servers at a privacy-protecting open resolver:
+
+    $ python3 soaping.py -r 2001:4b98:dc2:43:216:3eff:fea9:41a --tls .
