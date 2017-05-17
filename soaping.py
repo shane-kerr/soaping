@@ -2,9 +2,11 @@
 # TODO: get source IP address
 # TODO: errors
 # TODO: stats (queries sent, queries failed, etc.)
+# TODO: TCP?
 import argparse
 import base64
 import csv
+import curses
 import datetime
 import errno
 import io
@@ -31,34 +33,38 @@ import dns.rdatatype
 import dns.rdtypes
 import dns.resolver
 
+# We will use the CLOCK_MONOTONIC_RAW if available, otherwise CLOCK_MONOTONIC.
+CLOCK = getattr(time, 'CLOCK_MONOTONIC_RAW', getattr(time, 'CLOCK_MONOTONIC'))
 
-def _auth_query_thread(name_server, target_ip, qname, qtype, resultq, stopev):
+def _auth_query_thread(name_server, target_ip, qname, qtype, resultqs, stopev):
     logging.debug("_auth_query_thread(%r, %r, %r, %r, ...) startup",
                   name_server, target_ip, qname, qtype)
-    # we will use the CLOCK_MONOTONIC_RAW if available,
-    # otherwise CLOCK_MONOTONIC
-    clock = getattr(time, 'CLOCK_MONOTONIC_RAW',
-                    getattr(time, 'CLOCK_MONOTONIC'))
     nsid_option = dns.edns.GenericOption(dns.edns.NSID, b'')
     query = dns.message.make_query(qname, qtype, options=[nsid_option])
     while not stopev.is_set():
         query.id = random.randint(0, 65535)
         timestamp = time.time()
-        time_a = time.clock_gettime(clock)
+        time_a = time.clock_gettime(CLOCK)
         try:
             answer = dns.query.udp(query, where=target_ip, timeout=1,
                                    ignore_unexpected=True)
-            time_b = time.clock_gettime(clock)
+            time_b = time.clock_gettime(CLOCK)
             rt = time_b - time_a
-            resultq.put((name_server, target_ip, query, timestamp, rt, answer))
+            nsid = get_nsid(answer)
+            serial = get_serial(answer)
+            for resultq in resultqs:
+                resultq.put((name_server, target_ip, query,
+                             timestamp, rt, answer, nsid, serial))
             # log this at an even lower level than debug
             logging.log(5, "query -t %s %s @%s => %.4f seconds # %s",
                         dns.rdatatype.to_text(qtype), qname,
                         target_ip, (time_b-time_a), name_server)
         except dns.exception.Timeout:
-            time_b = time.clock_gettime(clock)
+            time_b = time.clock_gettime(CLOCK)
             rt = time_b - time_a
-            resultq.put((name_server, target_ip, query, timestamp, rt, None))
+            for resultq in resultqs:
+                resultq.put((name_server, target_ip, query,
+                             timestamp, rt, None, None, None))
             logging.debug("Timeout querying -t %s %s @%s # %s",
                           dns.rdatatype.to_text(qtype), qname, target_ip,
                           name_server)
@@ -208,7 +214,7 @@ def _json_output_thread(resultq, interval):
 def get_nsid(msg):
     for opt in msg.options:
         if opt.otype == dns.edns.NSID:
-            return opt.data
+            return opt.data.decode()
     return None
 
 
@@ -262,22 +268,14 @@ def _csv_output_thread(resultq, interval):
 
         # 3rd part of tuple is the question message
         # you can get the qname in query.question[0].name
-        name_server, target_ip, _, timestamp, rt, answer = result
+        name_server, target_ip, _, timestamp, rt, answer, nsid, serial = result
         when_dt = datetime.datetime.fromtimestamp(timestamp,
                                                   tz=datetime.timezone.utc)
         when = when_dt.strftime("%Y%m%dT%H%M%S.%f")
-        if answer is None:
+        if nsid is None:
             nsid = ""
+        if serial is None:
             serial = "-"
-        else:
-            nsid = get_nsid(answer)
-            if nsid is None:
-                nsid = ""
-            else:
-                nsid = nsid.decode()
-            serial = get_serial(answer)
-            if serial is None:
-                serial = ""
 
         csv_writer.writerow([serial, when, "%.6f" % rt,
                              name_server, target_ip, nsid])
@@ -345,6 +343,7 @@ def _start_tunnel(target_addr, ready_ev):
 def lookup_name_server_ips(domain, resolver_ip, use_tls):
     use_tcp = False
     resolver = dns.resolver.Resolver()
+    # TODO: set timeout
     if resolver_ip:
         if use_tls:
             logging.debug("tunnel closed")
@@ -397,8 +396,8 @@ def lookup_name_server_ips(domain, resolver_ip, use_tls):
     return name_server_ips
 
 
-def _soaping(domain, resolver_ip, use_tls, resultq, stopev):
-    logging.debug("_soaping(%r, resultq, stopev) startup", domain)
+def _soaping(domain, resolver_ip, use_tls, resultqs, stopev):
+    logging.debug("_soaping(%r, resultqs, stopev) startup", domain)
 
     thread_stopev = {}
     while not stopev.is_set():
@@ -426,7 +425,7 @@ def _soaping(domain, resolver_ip, use_tls, resultq, stopev):
                 thread_stopev[thread_id] = ev
                 t = threading.Thread(target=_auth_query_thread,
                                      args=(name_server, server_ip, domain,
-                                           dns.rdatatype.SOA, resultq, ev))
+                                           dns.rdatatype.SOA, resultqs, ev))
                 t.start()
 
         # stop any other threads on IP addresses no longer in use
@@ -447,11 +446,82 @@ def _soaping(domain, resolver_ip, use_tls, resultq, stopev):
     for ev in thread_stopev.values():
         ev.set()
 
-    logging.debug("_soaping(%r, resultq, stopev) shutdown", domain)
+    logging.debug("_soaping(%r, resultqs, stopev) shutdown", domain)
+
+
+# TODO: smoothed/average RTT
+# TODO: screen resize
+def ui(scr, domain, cursesq):
+    serials = {}
+    errors = []
+    last_refresh = 0
+    while True:
+        try:
+            item = cursesq.get(timeout=0.25)
+            if isinstance(item, tuple):
+                (name_server, target_ip, query,
+                 timestamp, rt, answer, nsid, serial) = item
+                if not answer:
+                    rt = None
+                host_id = (name_server, target_ip)
+                for serial in serials:
+                    if host_id in serials[serial]:
+                        del serials[serial][host_id]
+                if not serial in serials:
+                    serials[serial] = {}
+                serials[serial][host_id] = (name_server, target_ip, rt)
+            elif isinstance(item, logging.LogRecord):
+                errors = [item] + errors
+        except queue.Empty:
+            pass
+        # check time and write here
+        now = time.clock_gettime(CLOCK)
+        if now - last_refresh > 1:
+            last_refresh = now
+            # start with a blank screen
+            scr.erase()
+            scr_hig, scr_wid = scr.getmaxyx()
+            scr.addstr(0, 0, "soaping " + domain)
+            timestr = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+            scr.addstr(0, scr_wid - len(timestr) - 2, timestr)
+            # get the width for the name server and IP columns
+            ns_width = len("Name Server")
+            ip_width = len("IP")
+            for serial in serials.keys():
+                for name_server, target_ip, rt in serials[serial].values():
+                    ns_width = max(len(name_server), ns_width)
+                    ip_width = max(len(target_ip), ip_width)
+            # output our results
+            line = 2
+            for serial in sorted(serials.keys()):
+                scr.addstr(line, 0, "Serial [ %d ]" % serial)
+                scr.addstr(line+1, 0, "Name Server".ljust(ns_width) + "  " +
+                                      "IP".ljust(ip_width) + "  RTT msec")
+                line += 2
+                for host_id in sorted(serials[serial].keys()):
+                    name_server, target_ip, rt = serials[serial][host_id]
+                    if rt:
+                        print_rt = "%3d" % (rt * 1000)
+                    else:
+                        print_rt = "  -"
+                    scr.addstr(line, 0, name_server.ljust(ns_width) + "  " + 
+                                        target_ip.ljust(ip_width) + "       " +
+                                        print_rt)
+                    line += 1
+                line += 1
+            # output our errors
+#            err_idx = 0
+#            while (err_idx < len(errors)) and (line < scr_hig):
+#                scr.addstr(line, 0, str(dir(errors[err_idx])))
+#                err_idx += 1
+#                line += 1
+#                scr.getch()
+            # position the cursor at the bottom
+            scr.move(scr_hig-1, scr_wid-1)
+            scr.refresh()
 
 
 def main():
-    logging.basicConfig(level=logging.DEBUG)
     parser = argparse.ArgumentParser()
     parser.add_argument("domain", nargs=1, help="domain to check")
     parser.add_argument("-r", "--resolver", help="IP address of resolver")
@@ -467,22 +537,39 @@ def main():
             except OSError:
                 print("Bad IP address '%s'" % args.resolver, file=sys.stderr)
                 sys.exit(1)
+
+    # Use an internal queue for logging, which we will then 
+    # send to the curses display.
+    cursesq = queue.Queue()
+    logq_handler = logging.handlers.QueueHandler(cursesq)
+    qlogger = logging.getLogger()
+    qlogger.addHandler(logq_handler)
+    qlogger.setLevel(logging.DEBUG)
+#    logging.basicConfig(level=logging.DEBUG)
+
+    # Start our CSV output thread.
+    csvq = queue.Queue()
+    t = threading.Thread(target=_csv_output_thread, args=(csvq, 1800))
+    t.start()
+
+    # Start our actual DNS query master thread.
+    queues = (cursesq, csvq)
+    ev = threading.Event()
+    t = threading.Thread(target=_soaping,
+                         args=(args.domain[0], args.resolver, args.tls,
+                               queues, ev))
+    t.start()
+
     try:
-        q = queue.Queue()
-        t = threading.Thread(target=_csv_output_thread, args=(q, 1800))
-        t.start()
-        ev = threading.Event()
-        t = threading.Thread(target=_soaping,
-                             args=(args.domain[0], args.resolver, args.tls,
-                                   q, ev))
-        t.start()
-        t.join()
+        curses.wrapper(ui, args.domain[0], cursesq)
     except KeyboardInterrupt:
+        print("Shutting down...", end='', flush=True)
         # stop the authoritative query threads
         ev.set()
-        # stop the JSON thread
-        q.put(None)
+        # stop the CSV thread
+        csvq.put(None)
         t.join()
+        print("done")
 
 
 if __name__ == "__main__":
