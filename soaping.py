@@ -271,7 +271,7 @@ def _csv_output_thread(resultq, interval):
         name_server, target_ip, _, timestamp, rt, answer, nsid, serial = result
         when_dt = datetime.datetime.fromtimestamp(timestamp,
                                                   tz=datetime.timezone.utc)
-        when = when_dt.strftime("%Y%m%dT%H%M%S.%f")
+        when = when_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")
         if nsid is None:
             nsid = ""
         if serial is None:
@@ -461,15 +461,23 @@ def ui(scr, domain, cursesq):
             if isinstance(item, tuple):
                 (name_server, target_ip, query,
                  timestamp, rt, answer, nsid, serial) = item
-                if not answer:
-                    rt = None
-                host_id = (name_server, target_ip)
-                for serial in serials:
-                    if host_id in serials[serial]:
-                        del serials[serial][host_id]
-                if not serial in serials:
-                    serials[serial] = {}
-                serials[serial][host_id] = (name_server, target_ip, rt)
+                if answer:
+                    host_id = (name_server, target_ip)
+                    # remove from old serials if in any of them
+                    to_del = []
+                    for ser in serials:
+                        if host_id in serials[ser]:
+                            del serials[ser][host_id]
+                            if not serials[ser]:
+                                to_del.append(ser)
+                    # if this made one of the serials empty, remove it
+                    for ser in to_del:
+                        del serials[ser]
+                    # if the serial does not yet exist, make a dictionary for it
+                    if not serial in serials:
+                        serials[serial] = {}
+                    # and finally remember this information
+                    serials[serial][host_id] = (name_server, target_ip, rt)
             elif isinstance(item, logging.LogRecord):
                 errors = [item] + errors
         except queue.Empty:
