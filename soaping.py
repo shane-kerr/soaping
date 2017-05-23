@@ -36,6 +36,7 @@ import dns.resolver
 # We will use the CLOCK_MONOTONIC_RAW if available, otherwise CLOCK_MONOTONIC.
 CLOCK = getattr(time, 'CLOCK_MONOTONIC_RAW', getattr(time, 'CLOCK_MONOTONIC'))
 
+
 def _auth_query_thread(name_server, target_ip, qname, qtype, resultqs, stopev):
     logging.debug("_auth_query_thread(%r, %r, %r, %r, ...) startup",
                   name_server, target_ip, qname, qtype)
@@ -268,7 +269,7 @@ def _csv_output_thread(resultq, interval):
 
         # 3rd part of tuple is the question message
         # you can get the qname in query.question[0].name
-        name_server, target_ip, _, timestamp, rt, answer, nsid, serial = result
+        name_server, target_ip, _, timestamp, rt, _, nsid, serial = result
         when_dt = datetime.datetime.fromtimestamp(timestamp,
                                                   tz=datetime.timezone.utc)
         when = when_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")
@@ -306,7 +307,7 @@ def _tls_tunnel_listener(socket_in, target_addr):
             sel.register(ssl_socket_out, selectors.EVENT_READ, client_socket)
             connected = True
             while connected:
-                for key, mask in sel.select():
+                for key, _ in sel.select():
                     data = key.fileobj.recv(18000)
                     if len(data) == 0:
                         connected = False
@@ -449,8 +450,10 @@ def _soaping(domain, resolver_ip, use_tls, resultqs, stopev):
     logging.debug("_soaping(%r, resultqs, stopev) shutdown", domain)
 
 
+# TODO: screen too small
 # TODO: smoothed/average RTT
 # TODO: screen resize
+# TODO: see NSID somehow
 def ui(scr, domain, cursesq):
     serials = {}
     errors = []
@@ -459,8 +462,8 @@ def ui(scr, domain, cursesq):
         try:
             item = cursesq.get(timeout=0.25)
             if isinstance(item, tuple):
-                (name_server, target_ip, query,
-                 timestamp, rt, answer, nsid, serial) = item
+                (name_server, target_ip, _,
+                 _, rt, answer, _, serial) = item
                 if answer:
                     host_id = (name_server, target_ip)
                     # remove from old serials if in any of them
@@ -473,12 +476,15 @@ def ui(scr, domain, cursesq):
                     # if this made one of the serials empty, remove it
                     for ser in to_del:
                         del serials[ser]
-                    # if the serial does not yet exist, make a dictionary for it
-                    if not serial in serials:
+                    # if the serial does not yet exist, make a dictionary there
+                    if serial not in serials:
                         serials[serial] = {}
                     # and finally remember this information
                     serials[serial][host_id] = (name_server, target_ip, rt)
             elif isinstance(item, logging.LogRecord):
+                # a maximum size for errors to display
+                errors = errors[:1000]
+                # add this error
                 errors = [item] + errors
         except queue.Empty:
             pass
@@ -486,46 +492,60 @@ def ui(scr, domain, cursesq):
         now = time.clock_gettime(CLOCK)
         if now - last_refresh > 1:
             last_refresh = now
-            # start with a blank screen
-            scr.erase()
-            scr_hig, scr_wid = scr.getmaxyx()
-            scr.addstr(0, 0, "soaping " + domain)
-            timestr = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-            scr.addstr(0, scr_wid - len(timestr) - 2, timestr)
-            # get the width for the name server and IP columns
-            ns_width = len("Name Server")
-            ip_width = len("IP")
-            for serial in serials.keys():
-                for name_server, target_ip, rt in serials[serial].values():
-                    ns_width = max(len(name_server), ns_width)
-                    ip_width = max(len(target_ip), ip_width)
-            # output our results
-            line = 2
-            for serial in sorted(serials.keys()):
-                scr.addstr(line, 0, "Serial [ %d ]" % serial)
-                scr.addstr(line+1, 0, "Name Server".ljust(ns_width) + "  " +
-                                      "IP".ljust(ip_width) + "  RTT msec")
-                line += 2
-                for host_id in sorted(serials[serial].keys()):
-                    name_server, target_ip, rt = serials[serial][host_id]
-                    if rt:
-                        print_rt = "%3d" % (rt * 1000)
-                    else:
-                        print_rt = "  -"
-                    scr.addstr(line, 0, name_server.ljust(ns_width) + "  " + 
-                                        target_ip.ljust(ip_width) + "       " +
-                                        print_rt)
+            try:
+                # start with a blank screen
+                scr.erase()
+                scr_hig, scr_wid = scr.getmaxyx()
+                scr.addstr(0, 0, "soaping " + domain)
+                timestr = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+                scr.addstr(0, scr_wid - len(timestr) - 2, timestr)
+                # get the width for the name server and IP columns
+                ns_width = len("Name Server")
+                ip_width = len("IP")
+                for serial in serials:
+                    for name_server, target_ip, rt in serials[serial].values():
+                        ns_width = max(len(name_server), ns_width)
+                        ip_width = max(len(target_ip), ip_width)
+                # output our results
+                line = 2
+                for serial in sorted(serials.keys()):
+                    scr.addstr(line, 0, "Serial [ %d ]" % serial)
+                    header_str = ("Name Server".ljust(ns_width) + "  " +
+                                  "IP".ljust(ip_width) + "  " +
+                                  "RTT msec")
+                    scr.addstr(line+1, 0, header_str)
+                    line += 2
+                    for host_id in sorted(serials[serial].keys()):
+                        name_server, target_ip, rt = serials[serial][host_id]
+                        if rt:
+                            print_rt = "%4d" % (rt * 1000)
+                        else:
+                            print_rt = "   -"
+                        info_str = (name_server.ljust(ns_width) + "  " +
+                                    target_ip.ljust(ip_width) + "      " +
+                                    print_rt)
+                        scr.addstr(line, 0, info_str)
+                        line += 1
                     line += 1
-                line += 1
-            # output our errors
-#            err_idx = 0
-#            while (err_idx < len(errors)) and (line < scr_hig):
-#                scr.addstr(line, 0, str(dir(errors[err_idx])))
-#                err_idx += 1
-#                line += 1
-#                scr.getch()
-            # position the cursor at the bottom
-            scr.move(scr_hig-1, scr_wid-1)
+                # output our errors
+                if errors:
+                    scr.addstr(line, 0, "Log Messages")
+                    line += 1
+                err_idx = 0
+                while (err_idx < len(errors)) and (line < scr_hig):
+                    err = errors[err_idx]
+                    errwhen = time.strftime("%Y-%m-%d %H:%M:%S",
+                                            time.gmtime(err.created))
+                    errwhen += ".%03d" % err.msecs
+                    errmsg = errwhen + " " + err.msg
+                    scr.addstr(line, 0, errmsg[:scr_wid-1])
+                    err_idx += 1
+                    line += 1
+                # position the cursor at the bottom
+                scr.move(scr_hig-1, scr_wid-1)
+            except curses.error:
+                # Can happen for various reason (like resize)
+                pass
             scr.refresh()
 
 
@@ -546,12 +566,13 @@ def main():
                 print("Bad IP address '%s'" % args.resolver, file=sys.stderr)
                 sys.exit(1)
 
-    # Use an internal queue for logging, which we will then 
+    # Use an internal queue for logging, which we will then
     # send to the curses display.
     cursesq = queue.Queue()
     logq_handler = logging.handlers.QueueHandler(cursesq)
     qlogger = logging.getLogger()
     qlogger.addHandler(logq_handler)
+#    qlogger.setLevel(logging.INFO)
     qlogger.setLevel(logging.DEBUG)
 #    logging.basicConfig(level=logging.DEBUG)
 
