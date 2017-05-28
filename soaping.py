@@ -1,3 +1,9 @@
+# TODO: phone home
+# TODO: log to soaping.log
+# TODO: log to file name based on domain
+# TODO: add option to enable JSON
+# TODO: add option to enable CSV
+# TODO: display servers that don't respond
 # TODO: figure out how to make initial log rotate name on the correct time
 # TODO: get source IP address
 # TODO: errors
