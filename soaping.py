@@ -547,12 +547,17 @@ def ui(scr, domain, cursesq):
                     scr.addstr(line, 0, errmsg[:scr_wid-1])
                     err_idx += 1
                     line += 1
-                # position the cursor at the bottom
-                scr.move(scr_hig-1, scr_wid-1)
             except curses.error:
                 # Can happen for various reason (like resize)
                 pass
-            scr.refresh()
+
+            # try to set the cursor position and refresh the screen (if possible)
+            try:
+                # position the cursor at the bottom
+                scr.move(scr_hig-1, scr_wid-1)
+                scr.refresh()
+            except curses.error:
+                pass
 
 
 def main():
