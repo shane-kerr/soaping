@@ -1,3 +1,4 @@
+# TODO: handle when an NS is removed
 # TODO: phone home
 # TODO: log to soaping.log
 # TODO: log to file name based on domain
