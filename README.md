@@ -7,6 +7,8 @@ saves the serial number, response time, and name server ID (NSID)
 returned by each. This is useful for tracking DNS zone propagation
 time to the authoritative servers for a domain.
 
+![soaping screenshot](Screenshot_20170712_074356.png)
+
 ## Installation
 
 Soaping requires Python 3. The only additional requirement is the
@@ -16,8 +18,8 @@ To get the code you can clone the GitHub repository:
 
     $ git clone https://github.com/shane-kerr/soaping.git
 
-I like to use a virtual environment for that. In Debian you can do
-this as follows:
+I like to use a virtual environment for installation. In Debian you
+can do this as follows:
 
     $ sudo apt install python3-venv
     $ python3 -m venv venv
@@ -26,7 +28,7 @@ this as follows:
 
 For PyPy3 this is slightly different:
 
-    $ pypy -m venv venv
+    $ pypy3 -m venv venv
     $ . venv/bin/activate
     $ python3 -m ensurepip
     $ python3 -m pip install dnspython
@@ -52,3 +54,5 @@ It also supports DNS over TLS, so you could monitor the Yeti root
 servers at a privacy-protecting open resolver:
 
     $ python3 soaping.py -r 2001:4b98:dc2:43:216:3eff:fea9:41a --tls .
+
+The `yeti-checkroot.sh` script is provided for this.
