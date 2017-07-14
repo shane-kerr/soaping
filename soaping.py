@@ -1,3 +1,4 @@
+# TODO: command line option to log to CSV or not
 # TODO: handle when an NS is removed
 # TODO: phone home
 # TODO: log to soaping.log
@@ -11,13 +12,11 @@
 # TODO: stats (queries sent, queries failed, etc.)
 # TODO: TCP?
 import argparse
-import base64
 import csv
 import curses
 import datetime
 import errno
 import io
-import json
 import logging
 import logging.handlers
 import queue
@@ -94,129 +93,6 @@ def _auth_query_thread(name_server, target_ip, qname, qtype, resultqs, stopev):
 
     logging.debug("_auth_query_thread(%r, %r, %r, %r, ...) shutdown",
                   name_server, target_ip, qname, qtype)
-
-
-def _decode_rdata(name, ttl, rd):
-    ans = {}
-    if rd.rdtype == dns.rdatatype.SOA:
-        ans["TYPE"] = "SOA"
-        ans["NAME"] = name.to_text()
-        ans["TTL"] = ttl
-        ans["MNAME"] = rd.mname.to_text()
-        ans["RNAME"] = rd.rname.to_text()
-        ans["SERIAL"] = rd.serial
-    elif rd.rdtype == dns.rdatatype.TXT:
-        ans["TYPE"] = "TXT"
-        ans["NAME"] = name.to_text()
-        ans["TTL"] = ttl
-        ans["RDATA"] = [s.decode() for s in rd.strings]
-    return ans
-
-
-# https://atlas.ripe.net/docs/data_struct/#v4610_dns
-# missing:
-#   from (added by backend)
-#   group_id
-#   lts (last time synchronized... could use -1)
-#   msm_id (measurement ID)
-#   msm_name (measurement name)
-#   prb_id (probe ID)
-def dnsresp2dict(proto, src_addr, dst_name, dst_addr,
-                 error,
-                 timestamp, rt,
-                 query_msg, resp_msg):
-    d = {}
-
-    # pretend to be the latest firmware version
-    d["fw"] = 4710
-
-    answers = []
-    if resp_msg.answer:
-        for i in range(2):
-            if i >= len(resp_msg.answer[0]):
-                break
-            ans = _decode_rdata(resp_msg.answer[0].name,
-                                resp_msg.answer[0].ttl,
-                                resp_msg.answer[0][i])
-            if ans:
-                answers.append(ans)
-
-    result = {}
-    result["ANCOUNT"] = len(resp_msg.answer)
-    result["ARCOUNT"] = len(resp_msg.additional)
-    result["ID"] = resp_msg.id
-    result["NSCOUNT"] = len(resp_msg.authority)
-    result["QCOUNT"] = len(resp_msg.question)
-    result["abuf"] = base64.b64encode(resp_msg.to_wire()).decode()
-    result["answers"] = answers
-    result["rt"] = rt
-    result["src_addr"] = src_addr
-    d["result"] = result
-
-    if ":" in dst_addr:
-        d["af"] = 6
-    else:
-        d["af"] = 4
-    if dst_name is not None:
-        d["dns_name"] = dst_name
-    d["dst_addr"] = dst_addr
-    if error is not None:
-        d["error"], d["timeout"], d["getaddrinfo"] = error
-    # UDP or TCP
-    d["proto"] = proto
-    if query_msg:
-        d["qbuf"] = base64.b64encode(query_msg.to_wire()).decode()
-    d["timestamp"] = timestamp
-    d["type"] = "dns"
-
-    return d
-
-
-def _json_log_namer(name):
-    return re.sub(r'\.json', '', name) + ".json"
-
-
-def _json_output_thread(resultq, interval):
-    json_log = logging.getLogger('JSON output')
-    json_log.propagate = False
-
-    now = int(time.time())
-    extra_rollover = now - (now % interval) + interval
-    if interval % (24 * 60 * 60) == 0:
-        when = 'D'
-        interval //= 24 * 60 * 60
-    elif interval % (60 * 60) == 0:
-        when = 'H'
-        interval //= 60 * 60
-    elif interval % 60 == 0:
-        when = 'M'
-        interval //= 60
-    else:
-        when = 'S'
-    rh = logging.handlers.TimedRotatingFileHandler("soaping.json",
-                                                   when=when,
-                                                   interval=interval,
-                                                   utc=True)
-    rh.namer = _json_log_namer
-    json_log.addHandler(rh)
-    json_log.setLevel(logging.INFO)
-
-    while True:
-        result = resultq.get()
-        if result is None:
-            break
-        _, target_ip, query, timestamp, rt, answer = result
-        d = dnsresp2dict(proto="UDP",
-                         src_addr="192.0.2.1",
-                         dst_name=None, dst_addr=target_ip,
-                         error=None,
-                         timestamp=timestamp, rt=rt*1000,
-                         query_msg=query, resp_msg=answer)
-
-        if extra_rollover and time.time() >= extra_rollover:
-            rh.doRollover()
-            extra_rollover = None
-        json_log.info(json.dumps(d))
 
 
 def get_nsid(msg):
@@ -555,7 +431,8 @@ def ui(scr, domain, cursesq):
                 # Can happen for various reason (like resize)
                 pass
 
-            # try to set the cursor position and refresh the screen (if possible)
+            # try to set the cursor position and refresh the screen (if
+            # possible)
             try:
                 # position the cursor at the bottom
                 scr.move(scr_hig-1, scr_wid-1)
