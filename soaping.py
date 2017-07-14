@@ -1,8 +1,7 @@
-# TODO: command line option to log to CSV or not
+# TODO: log to file name based on domain
 # TODO: handle when an NS is removed
 # TODO: phone home
 # TODO: log to soaping.log
-# TODO: log to file name based on domain
 # TODO: add option to enable JSON
 # TODO: add option to enable CSV
 # TODO: display servers that don't respond
@@ -442,8 +441,11 @@ def ui(scr, domain, cursesq):
 
 
 def main():
+    # parse our command line arguments, if any
     parser = argparse.ArgumentParser()
     parser.add_argument("domain", nargs=1, help="domain to check")
+    parser.add_argument("-c", "--csv", action='store_true',
+                        help="log queries to CSV file")
     parser.add_argument("-r", "--resolver", help="IP address of resolver")
     parser.add_argument("-t", "--tls", action='store_true',
                         help="Use TLS to resolver")
@@ -458,10 +460,13 @@ def main():
                 print("Bad IP address '%s'" % args.resolver, file=sys.stderr)
                 sys.exit(1)
 
-    # We use fully-qualified domain names
+    # convert to fully-qualified name, if not already
     domain = args.domain[0]
     if not domain.endswith("."):
         domain += "."
+
+    # queues that we will send query results to
+    queues = []
 
     # Use an internal queue for logging, which we will then
     # send to the curses display.
@@ -472,14 +477,16 @@ def main():
 #    qlogger.setLevel(logging.INFO)
     qlogger.setLevel(logging.DEBUG)
 #    logging.basicConfig(level=logging.DEBUG)
+    queues.append(cursesq)
 
-    # Start our CSV output thread.
-    csvq = queue.Queue()
-    t = threading.Thread(target=_csv_output_thread, args=(csvq, 1800))
-    t.start()
+    # Start our CSV output thread, if requested.
+    if args.csv:
+        csvq = queue.Queue()
+        t = threading.Thread(target=_csv_output_thread, args=(csvq, 1800))
+        t.start()
+        queues.append(csvq)
 
     # Start our actual DNS query master thread.
-    queues = (cursesq, csvq)
     ev = threading.Event()
     t = threading.Thread(target=_soaping,
                          args=(domain, args.resolver, args.tls,
