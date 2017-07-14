@@ -499,8 +499,9 @@ def main():
         print("Shutting down...", end='', flush=True)
         # stop the authoritative query threads
         ev.set()
-        # stop the CSV thread
-        csvq.put(None)
+        # stop any running threads by sending None to their queue
+        for stopq in queues:
+            stopq.put(None)
         t.join()
         print("done")
 
