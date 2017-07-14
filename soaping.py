@@ -581,6 +581,11 @@ def main():
                 print("Bad IP address '%s'" % args.resolver, file=sys.stderr)
                 sys.exit(1)
 
+    # We use fully-qualified domain names
+    domain = args.domain[0]
+    if not domain.endswith("."):
+        domain += "."
+
     # Use an internal queue for logging, which we will then
     # send to the curses display.
     cursesq = queue.Queue()
@@ -600,12 +605,12 @@ def main():
     queues = (cursesq, csvq)
     ev = threading.Event()
     t = threading.Thread(target=_soaping,
-                         args=(args.domain[0], args.resolver, args.tls,
+                         args=(domain, args.resolver, args.tls,
                                queues, ev))
     t.start()
 
     try:
-        curses.wrapper(ui, args.domain[0], cursesq)
+        curses.wrapper(ui, domain, cursesq)
     except KeyboardInterrupt:
         print("Shutting down...", end='', flush=True)
         # stop the authoritative query threads
