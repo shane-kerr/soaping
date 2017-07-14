@@ -351,7 +351,7 @@ def _start_tunnel(target_addr, ready_ev):
 def lookup_name_server_ips(domain, resolver_ip, use_tls):
     use_tcp = False
     resolver = dns.resolver.Resolver()
-    # TODO: set timeout
+    resolver.lifetime = 2.0
     if resolver_ip:
         if use_tls:
             logging.debug("tunnel closed")
@@ -365,6 +365,9 @@ def lookup_name_server_ips(domain, resolver_ip, use_tls):
             resolver.nameservers = [resolver_ip]
     try:
         answer = resolver.query(domain, dns.rdatatype.NS, tcp=use_tcp)
+    except dns.exception.Timeout:
+        logging.warning("Timeout on NS lookup of %s", domain)
+        return None
     except Exception as ex:
         logging.error("Unexpected %s exception for NS lookup of %s: %s",
                       type(ex), domain, ex)
