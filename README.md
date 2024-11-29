@@ -24,15 +24,7 @@ can do this as follows:
     $ sudo apt install python3-venv
     $ python3 -m venv venv
     $ . venv/bin/activate
-    $ python3 -m pip install dnspython
-
-For PyPy3 this is slightly different:
-
-    $ pypy3 -m venv venv
-    $ . venv/bin/activate
-    $ python3 -m ensurepip
-    $ python3 -m pip install dnspython
-    $ python3 -m pip install selectors34
+    $ python3 -m pip install -r requirements.txt
 
 ## Running
 
