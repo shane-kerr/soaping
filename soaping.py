@@ -97,7 +97,7 @@ def _auth_query_thread(name_server, target_ip, qname, qtype, resultqs, stopev):
 def get_nsid(msg):
     for opt in msg.options:
         if opt.otype == dns.edns.NSID:
-            return opt.data.decode()
+            return opt.nsid
     return None
 
 
