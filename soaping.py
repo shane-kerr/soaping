@@ -341,9 +341,9 @@ def _soaping(domain, resolver_ip, use_tls, resultqs, stopev):
 
 # TODO: screen too small
 # TODO: smoothed/average RTT
-# TODO: see NSID somehow
 def ui(scr, domain, cursesq):
     serials = {}
+    host2nsid = {}
     errors = []
     last_refresh = 0
     while True:
@@ -351,7 +351,7 @@ def ui(scr, domain, cursesq):
             item = cursesq.get(timeout=0.25)
             if isinstance(item, tuple):
                 (name_server, target_ip, _,
-                 _, rt, answer, _, serial) = item
+                 _, rt, answer, nsid, serial) = item
                 if answer:
                     host_id = (name_server, target_ip)
                     # remove from old serials if in any of them
@@ -369,6 +369,7 @@ def ui(scr, domain, cursesq):
                         serials[serial] = {}
                     # and finally remember this information
                     serials[serial][host_id] = (name_server, target_ip, rt)
+                    host2nsid[host_id] = nsid
             elif isinstance(item, logging.LogRecord):
                 # a maximum size for errors to display
                 errors = errors[:1000]
@@ -405,7 +406,7 @@ def ui(scr, domain, cursesq):
                     scr.addstr(line, 0, "Serial [ %s ]" % serial)
                     header_str = ("Name Server".ljust(ns_width) + "  " +
                                   "IP".ljust(ip_width) + "  " +
-                                  "RTT msec")
+                                  "RTT msec  Name Server ID")
                     scr.addstr(line+1, 0, header_str)
                     line += 2
                     for host_id in sorted(serials[serial].keys()):
@@ -414,9 +415,13 @@ def ui(scr, domain, cursesq):
                             print_rt = "%4d" % (rt * 1000)
                         else:
                             print_rt = "   -"
+                        if nsid is None:
+                            nsid = b""
                         info_str = (name_server.ljust(ns_width) + "  " +
                                     target_ip.ljust(ip_width) + "      " +
-                                    print_rt)
+                                    print_rt + "  " +
+                                    nsid.decode(encoding='ASCII',
+                                                errors='backslashreplace'))
                         scr.addstr(line, 0, info_str)
                         line += 1
                     line += 1
