@@ -1,0 +1,6 @@
+version: 2
+
+ - package-ecosystem: "pip"
+   directory: "/"
+   allow:
+     dependency-type: "all"
