@@ -239,7 +239,9 @@ def lookup_name_server_ips(domain, resolver_ip, use_tls):
         else:
             resolver.nameservers = [resolver_ip]
     try:
-        answer = resolver.query(domain, dns.rdatatype.NS, tcp=use_tcp)
+        answer = resolver.resolve(qname=domain,
+                                  rdtype=dns.rdatatype.NS,
+                                  tcp=use_tcp)
     except dns.exception.Timeout:
         logging.warning("Timeout on NS lookup of %s", domain)
         return None
@@ -255,8 +257,9 @@ def lookup_name_server_ips(domain, resolver_ip, use_tls):
             name_server = rdata.target.to_text()
             name_server_ips[name_server] = []
             try:
-                ip_answer = resolver.query(name_server, dns.rdatatype.A,
-                                           tcp=use_tcp)
+                ip_answer = resolver.resolve(qname=name_server,
+                                             rdtype=dns.rdatatype.A,
+                                             tcp=use_tcp)
                 for r in ip_answer.rrset:
                     name_server_ips[name_server].append(r.address)
             except dns.resolver.NoAnswer:
@@ -267,8 +270,9 @@ def lookup_name_server_ips(domain, resolver_ip, use_tls):
                       "(name server for %s): %s"
                 logging.warning(msg, type(ex), name_server, domain, ex)
             try:
-                ip_answer = resolver.query(name_server, dns.rdatatype.AAAA,
-                                           tcp=use_tcp)
+                ip_answer = resolver.resolve(qname=name_server,
+                                             rdtype=dns.rdatatype.AAAA,
+                                             tcp=use_tcp)
                 for r in ip_answer.rrset:
                     name_server_ips[name_server].append(r.address)
             except dns.resolver.NoAnswer:
