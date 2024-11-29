@@ -397,8 +397,13 @@ def ui(scr, domain, cursesq):
                         ip_width = max(len(target_ip), ip_width)
                 # output our results
                 line = 2
-                for serial in sorted(serials.keys()):
-                    scr.addstr(line, 0, "Serial [ %d ]" % serial)
+                def keyfn(a):
+                    "If no SOA is in the zone, we will sort it first."
+                    if a is None:
+                        return -1
+                    return a
+                for serial in sorted(serials.keys(), key=keyfn):
+                    scr.addstr(line, 0, "Serial [ %s ]" % serial)
                     header_str = ("Name Server".ljust(ns_width) + "  " +
                                   "IP".ljust(ip_width) + "  " +
                                   "RTT msec")
