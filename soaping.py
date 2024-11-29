@@ -223,7 +223,7 @@ def _csv_output_thread(resultq, interval):
         csv_log.info(csv_line[:-1])
 
 
-def _tls_tunnel_listener(socket_in, target_addr):
+def _tls_tunnel_listener(socket_in, target_addr, target_hostname):
     """Only handle a single connection at a time."""
     logging.debug(
         "_tls_tunnel_listener(%r, %r) startup", socket_in, target_addr
@@ -239,7 +239,10 @@ def _tls_tunnel_listener(socket_in, target_addr):
             logging.debug("tunnel client connected from %r", client_addr)
             socket_out = socket.create_connection(target_addr)
             logging.debug("tunnel connected to %r", target_addr)
-            ssl_socket_out = ssl.wrap_socket(socket_out)
+            ssl_ctx = ssl.create_default_context()
+            ssl_socket_out = ssl_ctx.wrap_socket(
+                socket_out, server_hostname=target_hostname
+            )
             sel = selectors.DefaultSelector()
             sel.register(client_socket, selectors.EVENT_READ, ssl_socket_out)
             sel.register(ssl_socket_out, selectors.EVENT_READ, client_socket)
@@ -264,7 +267,7 @@ def _tls_tunnel_listener(socket_in, target_addr):
             client_socket.close()
 
 
-def _start_tunnel(target_addr, ready_ev):
+def _start_tunnel(target_addr, target_hostname, ready_ev):
     """Set up an internal tunnel to the given address,
     return the address we are listening on."""
     socket_in = socket.socket()
@@ -272,14 +275,16 @@ def _start_tunnel(target_addr, ready_ev):
     socket_in.bind(("127.0.0.1", 0))
     socket_in.listen(1)
     t = threading.Thread(
-        target=_tls_tunnel_listener, args=(socket_in, target_addr), daemon=True
+        target=_tls_tunnel_listener,
+        args=(socket_in, target_addr, target_hostname),
+        daemon=True,
     )
     t.start()
     ready_ev.set()
     return socket_in.getsockname()
 
 
-def lookup_name_server_ips(domain, resolver_ip, use_tls):
+def lookup_name_server_ips(domain, resolver_ip, resolver_hostname, use_tls):
     use_tcp = False
     resolver = dns.resolver.Resolver()
     resolver.lifetime = 2.0
@@ -287,7 +292,9 @@ def lookup_name_server_ips(domain, resolver_ip, use_tls):
         if use_tls:
             logging.debug("tunnel closed")
             tunnel_ready_ev = threading.Event()
-            tunnel = _start_tunnel((resolver_ip, 853), tunnel_ready_ev)
+            tunnel = _start_tunnel(
+                (resolver_ip, 853), resolver_hostname, tunnel_ready_ev
+            )
             resolver.nameservers = [tunnel[0]]
             resolver.port = tunnel[1]
             use_tcp = True
@@ -350,13 +357,15 @@ def lookup_name_server_ips(domain, resolver_ip, use_tls):
     return name_server_ips
 
 
-def _soaping(domain, resolver_ip, use_tls, resultqs, stopev):
+def _soaping(domain, resolver_ip, resolver_hostname, use_tls, resultqs, stopev):
     logging.debug("_soaping(%r, resultqs, stopev) startup", domain)
 
     thread_stopev = {}
     while not stopev.is_set():
         # find the IP addresses to use
-        server_ips = lookup_name_server_ips(domain, resolver_ip, use_tls)
+        server_ips = lookup_name_server_ips(
+            domain, resolver_ip, resolver_hostname, use_tls
+        )
         logging.debug("server_ips: %s", server_ips)
         if not server_ips:
             logging.warning("no name servers found for %r, retrying", domain)
@@ -537,6 +546,28 @@ def ui(scr, domain, cursesq):
                 pass
 
 
+def ip_to_hostname(ip_address):
+    res = dns.resolver.Resolver()
+    rsp = res.resolve_address(ip_address)
+    if rsp and rsp.rrset:
+        return str(rsp.rrset[0]).rstrip(".")
+    return None
+
+
+def hostname_to_ips(hostname, force_ipv4, force_ipv6):
+    ip_addrs = []
+    res = dns.resolver.Resolver()
+    if not force_ipv6:
+        rsp = res.resolve(qname=hostname, rdtype=dns.rdatatype.A)
+        if rsp and rsp.rrset:
+            ip_addrs.extend([str(rr) for rr in rsp.rrset])
+    if not force_ipv4:
+        rsp = res.resolve(qname=hostname, rdtype=dns.rdatatype.AAAA)
+        if rsp and rsp.rrset:
+            ip_addrs.extend([str(rr) for rr in rsp.rrset])
+    return ip_addrs
+
+
 def main():
     # parse our command line arguments, if any
     parser = argparse.ArgumentParser()
@@ -548,16 +579,31 @@ def main():
     parser.add_argument(
         "-t", "--tls", action="store_true", help="Use TLS to resolver"
     )
+    parser.add_argument("-4", "--ipv4", action="store_true", help="Use IPv4")
+    parser.add_argument("-6", "--ipv6", action="store_true", help="Use IPv6")
     args = parser.parse_args()
     if args.resolver is not None:
         try:
             socket.inet_pton(socket.AF_INET6, args.resolver)
+            resolver_ip = args.resolver
+            resolver_hostname = None
         except OSError:
             try:
                 socket.inet_pton(socket.AF_INET, args.resolver)
+                resolver_ip = args.resolver
+                resolver_hostname = None
             except OSError:
-                print("Bad IP address '%s'" % args.resolver, file=sys.stderr)
-                sys.exit(1)
+                resolver_ips = hostname_to_ips(
+                    args.resolver, args.ipv4, args.ipv6
+                )
+                if not resolver_ips:
+                    print("Bad resolver '%s'" % args.resolver, file=sys.stderr)
+                    sys.exit(1)
+                resolver_ip = random.choice(resolver_ips)
+                resolver_hostname = args.resolver
+
+    if args.tls and resolver_hostname is None:
+        resolver_hostname = ip_to_hostname(resolver_ip)
 
     # convert to fully-qualified name, if not already
     domain = args.domain[0]
@@ -588,7 +634,8 @@ def main():
     # Start our actual DNS query master thread.
     ev = threading.Event()
     t = threading.Thread(
-        target=_soaping, args=(domain, args.resolver, args.tls, queues, ev)
+        target=_soaping,
+        args=(domain, resolver_ip, resolver_hostname, args.tls, queues, ev),
     )
     t.start()
 
