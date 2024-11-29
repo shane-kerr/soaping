@@ -341,7 +341,6 @@ def _soaping(domain, resolver_ip, use_tls, resultqs, stopev):
 
 # TODO: screen too small
 # TODO: smoothed/average RTT
-# TODO: screen resize
 # TODO: see NSID somehow
 def ui(scr, domain, cursesq):
     serials = {}
