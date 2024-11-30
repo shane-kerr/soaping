@@ -582,6 +582,8 @@ def main():
     parser.add_argument("-4", "--ipv4", action="store_true", help="Use IPv4")
     parser.add_argument("-6", "--ipv6", action="store_true", help="Use IPv6")
     args = parser.parse_args()
+    resolver_ip = None
+    resolver_hostname = None
     if args.resolver is not None:
         try:
             socket.inet_pton(socket.AF_INET6, args.resolver)
