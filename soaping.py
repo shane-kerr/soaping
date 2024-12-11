@@ -501,6 +501,7 @@ def ui(scr, domain, cursesq):
                             print_rt = "%4d" % (rt * 1000)
                         else:
                             print_rt = "   -"
+                        nsid = host2nsid[host_id]
                         if nsid is None:
                             nsid = b""
                         info_str = (
