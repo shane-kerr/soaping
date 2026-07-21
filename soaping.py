@@ -420,6 +420,27 @@ def _soaping(domain, resolver_ip, resolver_hostname, use_tls, resultqs, stopev):
     logging.debug("_soaping(%r, resultqs, stopev) shutdown", domain)
 
 
+def serial2rfc3339(serial):
+    try:
+        epoch = int(serial)
+    except (TypeError, ValueError):
+        return serial
+
+    # If the value is sometime in the future, probably it is
+    # not the epoch time.
+    now = int(time.time())
+    if epoch > (now + (86400 * 35)):
+        return serial
+
+    # If the value is far in the past, probably it is not
+    # the epoch time.
+    if epoch < (now - (86400 * 365 * 10)):
+        return serial
+
+    # Otherwise return our serial with our RFC 3339-formatted information.
+    return time.strftime(f'{serial} (%Y-%m-%d %H:%M:%S)', time.gmtime(epoch))
+
+
 # TODO: screen too small
 # TODO: smoothed/average RTT
 def ui(scr, domain, cursesq):
@@ -485,7 +506,7 @@ def ui(scr, domain, cursesq):
                     return a
 
                 for serial in sorted(serials.keys(), key=keyfn):
-                    scr.addstr(line, 0, "Serial [ %s ]" % serial)
+                    scr.addstr(line, 0, f'Serial [ {serial2rfc3339(serial)} ]')
                     header_str = (
                         "Name Server".ljust(ns_width)
                         + "  "
