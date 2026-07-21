@@ -333,10 +333,7 @@ def lookup_name_server_ips(domain, resolver_ip, resolver_hostname, use_tls):
                 # we get this if we have no A records for the name server
                 pass
             except Exception as ex:
-                msg = (
-                    "Exception %s on A lookup for %s "
-                    "(name server for %s): %s"
-                )
+                msg = "Exception %s on A lookup for %s (name server for %s): %s"
                 logging.warning(msg, type(ex), name_server, domain, ex)
             try:
                 ip_answer = resolver.resolve(
@@ -348,10 +345,7 @@ def lookup_name_server_ips(domain, resolver_ip, resolver_hostname, use_tls):
                 # we get this if we have no AAAA records for the name server
                 pass
             except Exception as ex:
-                msg = (
-                    "Exception %s on AAAA lookup for %s "
-                    "(name server for %s): %s"
-                )
+                msg = "Exception %s on AAAA lookup for %s (name server for %s): %s"
                 logging.warning(msg, type(ex), name_server, domain, ex)
 
     return name_server_ips
@@ -438,7 +432,7 @@ def serial2rfc3339(serial):
         return serial
 
     # Otherwise return our serial with our RFC 3339-formatted information.
-    return time.strftime(f'{serial} (%Y-%m-%d %H:%M:%S)', time.gmtime(epoch))
+    return time.strftime(f"{serial} (%Y-%m-%d %H:%M:%S)", time.gmtime(epoch))
 
 
 # TODO: screen too small
@@ -506,7 +500,7 @@ def ui(scr, domain, cursesq):
                     return a
 
                 for serial in sorted(serials.keys(), key=keyfn):
-                    scr.addstr(line, 0, f'Serial [ {serial2rfc3339(serial)} ]')
+                    scr.addstr(line, 0, f"Serial [ {serial2rfc3339(serial)} ]")
                     header_str = (
                         "Name Server".ljust(ns_width)
                         + "  "
