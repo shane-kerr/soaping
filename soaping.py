@@ -414,7 +414,8 @@ def _soaping(domain, resolver_ip, resolver_hostname, use_tls, resultqs, stopev):
     logging.debug("_soaping(%r, resultqs, stopev) shutdown", domain)
 
 
-RFC3339_SERIAL = re.compile(r'^(20[123]\d)(0[1-9]|1[0-2])([012][1-9]|3[01])')
+RFC3339_SERIAL = re.compile(r"^(20[123]\d)(0[1-9]|1[0-2])([012][1-9]|3[01])")
+
 
 def serial2rfc3339(serial: int) -> str:
     # If the serial is in the format YYYYmmdd then use that.
