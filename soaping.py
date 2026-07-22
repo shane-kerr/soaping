@@ -414,25 +414,28 @@ def _soaping(domain, resolver_ip, resolver_hostname, use_tls, resultqs, stopev):
     logging.debug("_soaping(%r, resultqs, stopev) shutdown", domain)
 
 
-def serial2rfc3339(serial):
-    try:
-        epoch = int(serial)
-    except (TypeError, ValueError):
-        return serial
+RFC3339_SERIAL = re.compile(r'^(20[123]\d)(0[1-9]|1[0-2])([012][1-9]|3[01])')
+
+def serial2rfc3339(serial: int) -> str:
+    # If the serial is in the format YYYYmmdd then use that.
+    regex_match = RFC3339_SERIAL.match(str(serial))
+    if regex_match:
+        y, m, d = regex_match.groups()
+        return f"{serial} ({y}-{m}-{d})"
 
     # If the value is sometime in the future, probably it is
     # not the epoch time.
     now = int(time.time())
-    if epoch > (now + (86400 * 35)):
+    if serial > (now + (86400 * 35)):
         return serial
 
     # If the value is far in the past, probably it is not
     # the epoch time.
-    if epoch < (now - (86400 * 365 * 10)):
+    if serial < (now - (86400 * 365 * 10)):
         return serial
 
     # Otherwise return our serial with our RFC 3339-formatted information.
-    return time.strftime(f"{serial} (%Y-%m-%d %H:%M:%S)", time.gmtime(epoch))
+    return time.strftime(f"{serial} (%Y-%m-%d %H:%M:%S)", time.gmtime(serial))
 
 
 # TODO: screen too small
