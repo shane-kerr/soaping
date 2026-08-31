@@ -1,5 +1,5 @@
 black==26.5.1
-click==8.4.2
+click==8.5.0
 mypy-extensions==1.1.0
 packaging==26.3
 pathspec==1.1.1
