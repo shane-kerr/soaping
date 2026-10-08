@@ -450,7 +450,7 @@ def ui(scr, domain, cursesq):
         try:
             item = cursesq.get(timeout=0.25)
             if isinstance(item, tuple):
-                (name_server, target_ip, _, _, rt, answer, nsid, serial) = item
+                name_server, target_ip, _, _, rt, answer, nsid, serial = item
                 if answer:
                     host_id = (name_server, target_ip)
                     # remove from old serials if in any of them
