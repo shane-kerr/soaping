@@ -504,7 +504,10 @@ def ui(scr, domain, cursesq):
                     return a
 
                 for serial in sorted(serials.keys(), key=keyfn):
-                    scr.addstr(line, 0, f"Serial [ {serial2rfc3339(serial)} ]")
+                    if serial is None:
+                        scr.addstr(line, 0, f"Serial [ - ]")
+                    else:
+                        scr.addstr(line, 0, f"Serial [ {serial2rfc3339(serial)} ]")
                     header_str = (
                         "Name Server".ljust(ns_width)
                         + "  "
